@@ -1800,7 +1800,7 @@ fn draw_chip(
     th: Theme,
 ) {
     let block = if selected {
-        selected_card_block(focused, th)
+        selected_card_block(app, focused, th)
     } else {
         Block::default()
             .borders(Borders::ALL)
@@ -1857,6 +1857,9 @@ fn draw_chip(
     for (i, spans) in [first, second].into_iter().enumerate() {
         let Some(r) = row_rect(inner, i) else { break };
         Paragraph::new(Line::from(spans)).render(r, buf);
+    }
+    if selected {
+        paint_name_band(buf, app, inner, glyph_w as u16, th);
     }
     let head = usize::from(crate::launcher::CARD_HEAD_H);
     for (i, row) in terminal_tail_lines(app, t)
@@ -1960,12 +1963,55 @@ fn card_edge(a: &nebula_core::Agent, quiet: bool, th: Theme) -> Option<Color> {
 /// row in nebula wears, frame and all: `sel_bg` while the grid has the
 /// keys, `sel_bg_dim` while the pane or the PROJECT TABS do, so the card
 /// stays picked out as the one the pane reads.
-fn selected_card_block(focused: bool, th: Theme) -> Block<'static> {
-    Block::default()
+///
+/// HIGHLIGHT CURRENT CARD raises it further: the pane holding the keys
+/// is working on this very card, so the fill stays `sel_bg` then too and
+/// dims only for the PROJECT TABS, and the top border carries an `open`
+/// tag at its right — the frame says which card it is with no color at
+/// all. Its name row is filled by [`paint_name_band`].
+fn selected_card_block(app: &App, focused: bool, th: Theme) -> Block<'static> {
+    let highlight = app.highlight_current_card;
+    let lit = focused || (highlight && app.focus == Focus::Terminal);
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Thick)
         .border_style(Style::default().fg(th.accent))
-        .style(Style::default().bg(if focused { th.sel_bg } else { th.sel_bg_dim }))
+        .style(Style::default().bg(if lit { th.sel_bg } else { th.sel_bg_dim }));
+    if !highlight {
+        return block;
+    }
+    let edge = Style::default().fg(th.accent);
+    block.title_top(
+        Line::from(vec![
+            Span::styled("┫", edge),
+            Span::styled(OPEN_TAG, edge.add_modifier(Modifier::BOLD)),
+            Span::styled("┣", edge),
+        ])
+        .right_aligned(),
+    )
+}
+
+/// The word in the top border of the card under the cursor while
+/// HIGHLIGHT CURRENT CARD is on ([`selected_card_block`]).
+const OPEN_TAG: &str = " open ";
+
+/// HIGHLIGHT CURRENT CARD's name row: the first row of the cursor's card,
+/// from the cell before its name out to the air at the right border, in
+/// `on_accent` over `accent` — a tab's look, the loudest thing on the
+/// grid. `lead` is how many columns of `inner` (the text's rect, air
+/// already taken off) the status dot or terminal glyph holds before the
+/// name; those stay outside the band, so the dot keeps its status color.
+fn paint_name_band(buf: &mut Buffer, app: &App, inner: Rect, lead: u16, th: Theme) {
+    if !app.highlight_current_card || inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let band = Style::default().fg(th.on_accent).bg(th.accent);
+    let from = (inner.x + lead).saturating_sub(1);
+    for x in from..=inner.right() {
+        if let Some(cell) = buf.cell_mut((x, inner.y)) {
+            cell.set_style(band);
+        }
+    }
 }
 
 /// What an ARCHIVED card wears where a live one wears its STATUS DOT: the
@@ -2011,7 +2057,7 @@ fn draw_card(
         (th.dim, th.muted)
     };
     let block = if selected {
-        selected_card_block(focused, th)
+        selected_card_block(app, focused, th)
     } else {
         Block::default()
             .borders(Borders::ALL)
@@ -2107,6 +2153,9 @@ fn draw_card(
         }
         let Some(r) = row_rect(inner, i) else { break };
         Paragraph::new(Line::from(spans)).render(r, buf);
+    }
+    if selected {
+        paint_name_band(buf, app, inner, 2, th);
     }
 }
 
@@ -5156,6 +5205,83 @@ mod tests {
         assert_eq!(fill(&app, true, false), ("┏".into(), th.sel_bg_dim));
         assert_eq!(fill(&app, false, true), ("╭".into(), Color::Reset));
         assert_eq!(fill(&app, false, false), ("╭".into(), Color::Reset));
+    }
+
+    /// HIGHLIGHT CURRENT CARD: the cursor's card keeps `sel_bg` while the
+    /// pane has the keys (the PROJECT TABS still dim it), wears ` open `
+    /// in its top border, and its name row is `on_accent` over `accent`
+    /// from the cell before the name — the status dot stays outside it.
+    #[test]
+    fn highlight_current_card_keeps_the_fill_tags_the_frame_and_bands_the_name() {
+        use nebula_core::{Agent, AgentId, AgentKind, AgentStatus, WorktreeId};
+        let row = LauncherRow {
+            agent: Agent {
+                id: AgentId("a1".into()),
+                worktree_id: WorktreeId("w1".into()),
+                name: "fix login".into(),
+                status: AgentStatus::Running,
+                archived: false,
+                archived_at: 0,
+                unseen: false,
+                kind: AgentKind::Claude,
+                custom_harness: None,
+                model: None,
+                effort: None,
+                session_id: None,
+                cloud_session_id: None,
+                sort_order: 0,
+                status_changed_at: 0,
+                alive: true,
+                issue_url: None,
+                recent_prompts: Vec::new(),
+            },
+            project: "nebula".into(),
+            branch: "feat-x".into(),
+            pr: None,
+        };
+        let th = Theme::by_name("coral");
+        let mut app = App::new();
+        app.theme = th;
+        let draw = |app: &App, focused: bool| {
+            let area = Rect::new(0, 0, 40, crate::launcher::CARD_H);
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+                    .unwrap();
+            terminal
+                .draw(|f| draw_one(f, app, area, &row, true, focused, th))
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+
+        // Off: the plain thick frame, no tag, no band, dimmed off the grid.
+        app.focus = Focus::Terminal;
+        let buf = draw(&app, false);
+        assert!(!row_string(&buf, 0).contains("open"));
+        assert_eq!(buf.cell((20, 1)).unwrap().bg, th.sel_bg_dim);
+
+        app.highlight_current_card = true;
+        let buf = draw(&app, false);
+        assert!(
+            row_string(&buf, 0).contains("┫ open ┣"),
+            "{:?}",
+            row_string(&buf, 0)
+        );
+        // Border, air, dot at x = 2, its space at 3, the name from 4.
+        assert_ne!(buf.cell((2, 1)).unwrap().bg, th.accent, "the dot stays out");
+        for x in 3..=38 {
+            let cell = buf.cell((x, 1)).unwrap();
+            assert_eq!((cell.fg, cell.bg), (th.on_accent, th.accent), "x={x}");
+        }
+        assert_eq!(
+            buf.cell((20, 2)).unwrap().bg,
+            th.sel_bg,
+            "the pane keeps it lit"
+        );
+
+        // The PROJECT TABS holding the keys still dim it.
+        app.focus = Focus::Sessions;
+        let buf = draw(&app, false);
+        assert_eq!(buf.cell((20, 2)).unwrap().bg, th.sel_bg_dim);
     }
 
     /// CARD LINE COUNTS: the lines behind the file count always follow it

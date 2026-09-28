@@ -398,6 +398,7 @@ pub enum SettingKind {
     Animations,
     BlackBackground,
     HideCardMarks,
+    HighlightCurrentCard,
     SessionPane,
     WorktreeLayout,
     ExpandAllWorktrees,
@@ -501,6 +502,7 @@ impl SettingKind {
             | SettingKind::WorktreeLayout
             | SettingKind::CardIssueNumber => (2026, 9, 24),
             SettingKind::ExpandAllWorktrees | SettingKind::FollowNewSession => (2026, 9, 26),
+            SettingKind::HighlightCurrentCard => (2026, 9, 28),
         }
     }
 
@@ -672,6 +674,12 @@ pub const SETTINGS_TABS: &[SettingsTab] = &[
                 kind: SettingKind::CardIssueNumber,
                 label: "Card issue number",
                 hint: "Show the #number of the GitHub issue a session was started from on its card; click it to open the issue",
+                group: "",
+            },
+            SettingSpec {
+                kind: SettingKind::HighlightCurrentCard,
+                label: "Highlight current card",
+                hint: "Keep the cursor's card raised while you type in its pane, tag its frame 'open' and fill its name row in the accent (off = the plain thick frame, dimmed while the pane has the keys)",
                 group: "",
             },
             SettingSpec {
@@ -1043,6 +1051,12 @@ pub struct Config {
     /// before, `hide_terminal_glyphs`, too.
     #[serde(alias = "hide_terminal_glyphs")]
     pub hide_card_marks: bool,
+    /// HIGHLIGHT CURRENT CARD: the card under the cursor — the one the
+    /// pane reads — keeps its raised `sel_bg` fill while the pane has the
+    /// keys (dimming only for the PROJECT TABS), wears an `open` tag in
+    /// its top border and fills its name row in the accent. On by
+    /// default; off leaves the plain thick accent frame.
+    pub highlight_current_card: bool,
     /// Where the LAUNCHER VIEW's PANE — the session under the cursor, live
     /// — sits against the GRID of cards: `right` (down that side of them,
     /// the default) or `bottom` (under them). Also written by the SIDE
@@ -1406,6 +1420,7 @@ impl Default for Config {
             animations: true,
             black_background: true,
             hide_card_marks: false,
+            highlight_current_card: true,
             session_pane: crate::launcher::PaneSide::default().as_str().into(),
             worktree_layout: WORKTREE_LAYOUTS[0].into(),
             expand_all_worktrees: false,
@@ -2214,6 +2229,7 @@ impl Config {
             SettingKind::Animations => on_off(self.animations).into(),
             SettingKind::BlackBackground => on_off(self.black_background).into(),
             SettingKind::HideCardMarks => shown_hidden(self.hide_card_marks).into(),
+            SettingKind::HighlightCurrentCard => on_off(self.highlight_current_card).into(),
             SettingKind::SessionPane => self.pane_side().as_str().into(),
             SettingKind::WorktreeLayout => WORKTREE_LAYOUTS[usize::from(self.list_layout())].into(),
             SettingKind::ExpandAllWorktrees => on_off(self.expand_all_worktrees).into(),
@@ -2312,6 +2328,9 @@ impl Config {
             }
             SettingKind::HideCardMarks => {
                 self.hide_card_marks = !self.hide_card_marks;
+            }
+            SettingKind::HighlightCurrentCard => {
+                self.highlight_current_card = !self.highlight_current_card;
             }
             SettingKind::SessionPane => {
                 // Cycled from the resolved side, so a hand edit off the
@@ -3588,6 +3607,32 @@ mod tests {
 
         let legacy: Config = serde_json::from_str("{}").unwrap();
         assert!(legacy.card_issue_number);
+    }
+
+    /// HIGHLIGHT CURRENT CARD: an Appearance row that reads `on` / `off`,
+    /// on by default (a config that predates the key too), and persisted
+    /// under `highlight_current_card`.
+    #[test]
+    fn highlight_current_card_default_on_toggle_on_the_appearance_tab_and_persist() {
+        let mut cfg = Config::default();
+        assert!(cfg.highlight_current_card, "on by default");
+        assert_eq!(cfg.value_label(SettingKind::HighlightCurrentCard), "on");
+
+        let (tab, row) = locate(SettingKind::HighlightCurrentCard).unwrap();
+        assert_eq!(SETTINGS_TABS[tab].title, "Appearance");
+        cfg.cycle(tab, row, 0);
+        assert!(!cfg.highlight_current_card);
+        assert_eq!(cfg.value_label(SettingKind::HighlightCurrentCard), "off");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        cfg.save_to(&path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(r#""highlight_current_card": false"#), "{raw}");
+        assert!(!load_from(&path).highlight_current_card);
+
+        let legacy: Config = serde_json::from_str("{}").unwrap();
+        assert!(legacy.highlight_current_card);
     }
 
     /// EXPAND ALL WORKTREES: an Appearance row under **Worktree layout**
