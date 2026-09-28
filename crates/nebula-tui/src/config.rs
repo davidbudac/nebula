@@ -679,7 +679,7 @@ pub const SETTINGS_TABS: &[SettingsTab] = &[
             SettingSpec {
                 kind: SettingKind::HighlightCurrentCard,
                 label: "Highlight current card",
-                hint: "Drop the cursor's card fill for a thin halo around its frame, in the card's status color and pulsing while it runs, asks or waits unread (off = the plain thick frame over a raised fill)",
+                hint: "Wash the cursor's card faintly in its status color, breathing while it runs, asks or waits unread, and keep it lit while you type in its pane (off = the plain gray fill)",
                 group: "",
             },
             SettingSpec {
@@ -1052,10 +1052,9 @@ pub struct Config {
     #[serde(alias = "hide_terminal_glyphs")]
     pub hide_card_marks: bool,
     /// HIGHLIGHT CURRENT CARD: the card under the cursor — the one the
-    /// pane reads — drops its raised fill for a thin halo around its
-    /// frame in its status color, pulsing while something is going on.
-    /// On by default; off leaves the plain thick accent frame over the
-    /// fill.
+    /// pane reads — trades its gray fill for a faint wash of its status
+    /// color, breathing while something is going on, and keeps it while
+    /// the pane has the keys. On by default; off leaves the gray fill.
     pub highlight_current_card: bool,
     /// Where the LAUNCHER VIEW's PANE — the session under the cursor, live
     /// — sits against the GRID of cards: `right` (down that side of them,

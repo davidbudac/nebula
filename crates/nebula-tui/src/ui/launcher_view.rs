@@ -792,9 +792,6 @@ fn draw_bands(
     // does. Pushed after every card, rule and arrow so they keep their
     // own targets under `hit_at`'s first-match scan.
     let mut band_areas = Vec::with_capacity(bands.len());
-    // The cursor's card, haloed once every band is down so nothing drawn
-    // after it paints over the line ([`paint_card_halo`]).
-    let mut halo = None;
     for (index, band) in bands.iter().enumerate() {
         let pb = &panel.bands[index];
         let whole = Rect {
@@ -858,7 +855,7 @@ fn draw_bands(
         // one it remembers — what the pane reads, and what the keys walk
         // — is raised out of the row ([`selected_card_block`]), its fill
         // brighter while the keys are on the grid (or, with HIGHLIGHT
-        // CURRENT CARD, haloed instead); the rest are a preview. A click on any lands the
+        // CURRENT CARD, washed in its status color); the rest are a preview. A click on any lands the
         // cursor on it (`HitTarget::LauncherCard`), and a card drawn cut
         // is clicked on the rows of it there are: the landing scrolls
         // the rest of it into view (`settle_panel_scroll`).
@@ -918,9 +915,6 @@ fn draw_bands(
                         continue;
                     };
                     let selected = on && at == Some(i);
-                    if selected {
-                        halo = Some((placed, card));
-                    }
                     draw_cut(f, placed, |buf, r| {
                         draw_any_card(buf, &*app, r, card, selected, keys, th, &mut cfg)
                     });
@@ -956,9 +950,6 @@ fn draw_bands(
                     };
                     let card = &band.cards[slot.at.card];
                     let selected = on && at == Some(slot.at.card);
-                    if selected {
-                        halo = Some((placed, card));
-                    }
                     draw_cut(f, placed, |buf, r| {
                         draw_any_card(buf, &*app, r, card, selected, keys, th, &mut cfg)
                     });
@@ -993,9 +984,6 @@ fn draw_bands(
                 }
             }
         }
-    }
-    if let Some((placed, card)) = halo {
-        paint_card_halo(f.buffer_mut(), app, placed, card, window, th);
     }
     draw_panel_edge_marks(f, panel, scroll, th);
     app.hits.extend(band_areas);
@@ -1805,7 +1793,7 @@ fn draw_chip(
     th: Theme,
 ) {
     let block = if selected {
-        selected_card_block(app, focused, th)
+        selected_card_block(app, focused, None, th)
     } else {
         Block::default()
             .borders(Borders::ALL)
@@ -1966,111 +1954,66 @@ fn card_edge(a: &nebula_core::Agent, quiet: bool, th: Theme) -> Option<Color> {
 /// keys, `sel_bg_dim` while the pane or the PROJECT TABS do, so the card
 /// stays picked out as the one the pane reads.
 ///
-/// HIGHLIGHT CURRENT CARD trades the fill for a halo around the frame
-/// ([`paint_card_halo`]): the card keeps the grid's own background.
-fn selected_card_block(app: &App, focused: bool, th: Theme) -> Block<'static> {
+/// HIGHLIGHT CURRENT CARD trades the gray fill for a faint wash of the
+/// card's own light ([`card_tint`]), kept while the pane has the keys.
+/// `status` is the color its frame would wear were it not selected
+/// ([`card_edge`]); none for a quiet card or a terminal's.
+fn selected_card_block(
+    app: &App,
+    focused: bool,
+    status: Option<Color>,
+    th: Theme,
+) -> Block<'static> {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Thick)
         .border_style(Style::default().fg(th.accent));
-    if app.highlight_current_card {
-        return block;
-    }
-    block.style(Style::default().bg(if focused { th.sel_bg } else { th.sel_bg_dim }))
+    let fill = if app.highlight_current_card {
+        card_tint(app, status, th)
+    } else if focused {
+        th.sel_bg
+    } else {
+        th.sel_bg_dim
+    };
+    block.style(Style::default().bg(fill))
 }
 
-/// HIGHLIGHT CURRENT CARD's halo: a hairline one cell outside the cursor's
-/// card — `▁` over it, `▔` under it, `▕` and `▏` at its sides, corners
-/// left out — in the color its frame would wear were it not selected
-/// ([`card_edge`]), taken well down toward black so it never outshouts
-/// the accent frame inside it. A card with something going on — running,
-/// asking, finished and unread — breathes: the halo pulses between near
-/// black and that dim status color ([`halo_level`]). A quiet card or a
-/// terminal's holds still in a dim accent, as every card does with the
-/// ANIMATIONS off.
-///
-/// Only the grid's air takes the line: over the band's rule the `─`
-/// under the card is recolored rather than replaced, and any word or
-/// arrow in the ring is left alone. Rows off the `window` and edges a
-/// scroll cut away get none.
-fn paint_card_halo(
-    buf: &mut Buffer,
-    app: &App,
-    placed: crate::launcher::Placed,
-    card: &crate::launcher::Card,
-    window: Rect,
-    th: Theme,
-) {
-    if !app.highlight_current_card {
-        return;
-    }
-    let status = match card {
-        crate::launcher::Card::Session(row) => {
-            let a = &row.agent;
-            let quiet = app.is_placeholder_agent(&a.id)
-                || a.archived
-                || (!a.alive && a.cloud_session_id.is_none());
-            card_edge(a, quiet, th)
-        }
-        crate::launcher::Card::Terminal(_) => None,
+/// HIGHLIGHT CURRENT CARD's fill: the card's status color taken nearly to
+/// black, so the card is only just washed in it. A card with something
+/// going on — running, asking, finished and unread — breathes, the wash
+/// rising and falling on the sweep's clock ([`tint_level`]); a quiet
+/// card or a terminal's holds a still wash of the accent, as every card
+/// does with the ANIMATIONS off. Fainter still while the PROJECT TABS
+/// hold the keys.
+fn card_tint(app: &App, status: Option<Color>, th: Theme) -> Color {
+    let (color, level) = match status {
+        Some(c) if app.animations => (c, tint_level(app.sweep_phase())),
+        Some(c) => (c, TINT_PEAK),
+        None => (th.accent, TINT_STILL),
     };
-    let color = match status {
-        Some(c) if app.animations => dim_toward_black(c, halo_level(app.sweep_phase())),
-        Some(c) => dim_toward_black(c, HALO_PEAK),
-        None => dim_toward_black(th.accent, HALO_STILL),
+    let away = if app.launcher_tab_cursor.is_none() {
+        1.0
+    } else {
+        0.6
     };
-    let r = placed.rect;
-    let in_window = |y: u16| y >= window.y && y < window.bottom();
-    let mut paint = |x: u16, y: u16, glyph: &str| {
-        if !in_window(y) {
-            return;
-        }
-        let Some(cell) = buf.cell_mut((x, y)) else {
-            return;
-        };
-        match cell.symbol() {
-            " " => {
-                cell.set_symbol(glyph).set_fg(color);
-            }
-            "─" => {
-                cell.set_fg(color);
-            }
-            _ => {}
-        }
-    };
-    for y in r.y..r.bottom() {
-        if let Some(x) = r.x.checked_sub(1) {
-            paint(x, y, "▕");
-        }
-        paint(r.right(), y, "▏");
-    }
-    for x in r.x..r.right() {
-        if placed.cut_top == 0 {
-            if let Some(y) = r.y.checked_sub(1) {
-                paint(x, y, "▁");
-            }
-        }
-        if placed.cut_bottom == 0 {
-            paint(x, r.bottom(), "▔");
-        }
-    }
+    dim_toward_black(color, level * away)
 }
 
-/// How much of its status color a pulsing halo keeps at its brightest,
-/// and how much a still one keeps of the accent.
-const HALO_PEAK: f32 = 0.55;
-const HALO_STILL: f32 = 0.45;
-/// Its dimmest: close enough to black that the line all but goes out.
-const HALO_FLOOR: f32 = 0.12;
+/// How much of its status color a breathing card's fill keeps at its
+/// brightest, and how much a still one keeps of the accent.
+const TINT_PEAK: f32 = 0.16;
+const TINT_STILL: f32 = 0.10;
+/// Its dimmest: all but the grid's own black.
+const TINT_FLOOR: f32 = 0.05;
 /// Sweep frames ([`crate::app::SWEEP_FRAME`]) in one breath, ~1.6 s.
-const HALO_BREATH: usize = 16;
+const TINT_BREATH: usize = 16;
 
-/// Where a pulsing halo is in its breath at sweep `phase`: a cosine from
-/// [`HALO_FLOOR`] up to [`HALO_PEAK`] and back.
-fn halo_level(phase: usize) -> f32 {
-    let t = (phase % HALO_BREATH) as f32 / HALO_BREATH as f32;
+/// Where a breathing fill is at sweep `phase`: a cosine from
+/// [`TINT_FLOOR`] up to [`TINT_PEAK`] and back.
+fn tint_level(phase: usize) -> f32 {
+    let t = (phase % TINT_BREATH) as f32 / TINT_BREATH as f32;
     let wave = (1.0 - (t * std::f32::consts::TAU).cos()) / 2.0;
-    HALO_FLOOR + (HALO_PEAK - HALO_FLOOR) * wave
+    TINT_FLOOR + (TINT_PEAK - TINT_FLOOR) * wave
 }
 
 /// `c` at `level` of its brightness, the rest black — truecolor, as
@@ -2183,8 +2126,9 @@ fn draw_card(
     } else {
         (th.dim, th.muted)
     };
+    let edge = card_edge(a, archived || pending || cold, th);
     let block = if selected {
-        selected_card_block(app, focused, th)
+        selected_card_block(app, focused, edge, th)
     } else {
         Block::default()
             .borders(Borders::ALL)
@@ -2196,10 +2140,7 @@ fn draw_card(
             } else {
                 BorderType::Rounded
             })
-            .border_style(
-                Style::default()
-                    .fg(card_edge(a, archived || pending || cold, th).unwrap_or(th.edge)),
-            )
+            .border_style(Style::default().fg(edge.unwrap_or(th.edge)))
     };
     let inner = block.inner(area);
     block.render(area, buf);
@@ -5331,13 +5272,12 @@ mod tests {
         assert_eq!(fill(&app, false, false), ("╭".into(), Color::Reset));
     }
 
-    /// HIGHLIGHT CURRENT CARD: the cursor's card drops its fill and gets a
-    /// hairline halo one cell outside its frame — corners left out, the
-    /// rule's `─` recolored rather than replaced — in its status color,
-    /// dimmed and pulsing, or still in a dim accent once nothing is going
-    /// on.
+    /// HIGHLIGHT CURRENT CARD: the cursor's card is washed, very faintly,
+    /// in its status color — breathing while it runs, still in the accent
+    /// once nothing is going on — and keeps the wash while the pane has
+    /// the keys.
     #[test]
-    fn highlight_current_card_drops_the_fill_and_haloes_the_card_in_its_status_color() {
+    fn highlight_current_card_washes_the_card_faintly_in_its_status_color() {
         use nebula_core::{Agent, AgentId, AgentKind, AgentStatus, WorktreeId};
         let row = LauncherRow {
             agent: Agent {
@@ -5378,79 +5318,60 @@ mod tests {
             terminal.backend().buffer().clone()
         };
 
-        // Off: the plain thick frame, the fill dimmed off the grid.
+        // Off: the plain gray fill, dimmed off the grid.
         app.focus = Focus::Terminal;
         let buf = draw(&app, false);
         assert_eq!(buf.cell((20, 1)).unwrap().bg, th.sel_bg_dim);
 
+        // On: a faint wash of the running yellow, frame and all, while
+        // the pane has the keys.
         app.highlight_current_card = true;
         let buf = draw(&app, false);
         assert!(!row_string(&buf, 0).contains("open"), "no tag");
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "┏");
-        assert_eq!(buf.cell((20, 1)).unwrap().bg, Color::Reset, "no fill");
-        assert_eq!(buf.cell((20, 2)).unwrap().bg, Color::Reset, "no fill");
-
-        // The halo: a card at (2, 2) in a 44 x CARD_H + 4 buffer, the row
-        // above it a rule with a word at its left.
-        let (w, h) = (44, crate::launcher::CARD_H + 4);
-        let full = Rect::new(0, 0, w, h);
-        let card = Rect::new(2, 2, 40, crate::launcher::CARD_H);
-        let placed = crate::launcher::Placed {
-            rect: card,
-            cut_top: 0,
-            cut_bottom: 0,
+        let fill = buf.cell((20, 2)).unwrap().bg;
+        assert_eq!(buf.cell((0, 0)).unwrap().bg, fill);
+        assert_eq!(buf.cell((20, 1)).unwrap().bg, fill, "no name band");
+        let Color::Rgb(r, g, b) = fill else {
+            panic!("{fill:?}")
         };
-        let halo = |app: &App, row: &LauncherRow| {
-            let mut buf = Buffer::empty(full);
-            buf.set_string(0, 1, "── main ", Style::default().fg(th.edge));
-            buf.set_string(8, 1, "─".repeat(36), Style::default().fg(th.edge));
-            let card = crate::launcher::Card::Session(row.clone());
-            paint_card_halo(&mut buf, app, placed, &card, full, th);
-            buf
-        };
-        let buf = halo(&app, &row);
-        let color = buf.cell((card.x - 1, card.y)).unwrap().fg;
-        assert!(matches!(color, Color::Rgb(..)), "{color:?}");
-        for y in card.y..card.bottom() {
-            assert_eq!(buf.cell((card.x - 1, y)).unwrap().symbol(), "▕");
-            assert_eq!(buf.cell((card.right(), y)).unwrap().symbol(), "▏");
-            assert_eq!(buf.cell((card.right(), y)).unwrap().fg, color);
-        }
-        for x in card.x..card.right() {
-            assert_eq!(buf.cell((x, card.bottom())).unwrap().symbol(), "▔");
-        }
-        // Over the rule: the word is left be, the dashes recolored.
-        assert_eq!(buf.cell((4, 1)).unwrap().symbol(), "a");
-        assert_eq!(buf.cell((4, 1)).unwrap().fg, th.edge);
-        assert_eq!(buf.cell((20, 1)).unwrap().symbol(), "─");
-        assert_eq!(buf.cell((20, 1)).unwrap().fg, color);
-        assert_eq!(buf.cell((card.x - 1, card.bottom())).unwrap().symbol(), " ");
+        assert!(r.max(g).max(b) <= 45, "faint: {fill:?}");
+        assert!(r > b && g > b, "yellowish: {fill:?}");
 
-        // Running pulses: the halo changes over a breath, and stays well
-        // under the status color.
-        let levels: Vec<f32> = (0..HALO_BREATH).map(halo_level).collect();
+        // It breathes between the floor and the peak.
+        let levels: Vec<f32> = (0..TINT_BREATH).map(tint_level).collect();
         assert!(levels
             .iter()
-            .all(|l| *l >= HALO_FLOOR - 1e-4 && *l <= HALO_PEAK + 1e-4));
-        assert!(levels[HALO_BREATH / 2] > levels[0] + 0.3);
+            .all(|l| *l >= TINT_FLOOR - 1e-4 && *l <= TINT_PEAK + 1e-4));
+        assert!(levels[TINT_BREATH / 2] > levels[0] + 0.1);
         assert_eq!(
             dim_toward_black(Color::Indexed(209), 0.5),
             Color::Rgb(128, 68, 48)
         );
 
-        // A quiet card, or the animations off, holds still.
+        // A quiet card holds a still wash of the accent; the animations
+        // off hold a live one still at its peak.
         let mut idle = row.clone();
         idle.agent.status = AgentStatus::Fresh;
-        let still = halo(&app, &idle).cell((card.x - 1, card.y)).unwrap().fg;
-        assert_eq!(still, dim_toward_black(th.accent, HALO_STILL));
+        let idle_card = |app: &App| {
+            let area = Rect::new(0, 0, 40, crate::launcher::CARD_H);
+            let mut buf = Buffer::empty(area);
+            draw_card(&mut buf, app, area, &idle, true, false, th, &mut None);
+            buf.cell((20, 2)).unwrap().bg
+        };
+        assert_eq!(idle_card(&app), dim_toward_black(th.accent, TINT_STILL));
         app.animations = false;
-        let fixed = halo(&app, &row).cell((card.x - 1, card.y)).unwrap().fg;
-        assert_eq!(fixed, dim_toward_black(th.warn, HALO_PEAK));
+        assert_eq!(
+            draw(&app, false).cell((20, 2)).unwrap().bg,
+            dim_toward_black(th.warn, TINT_PEAK)
+        );
 
-        // Off, no halo at all.
-        app.highlight_current_card = false;
-        let buf = halo(&app, &row);
-        assert_eq!(buf.cell((card.x - 1, card.y)).unwrap().symbol(), " ");
+        // The PROJECT TABS holding the keys fade it further.
+        app.launcher_tab_cursor = Some(nebula_core::ProjectId("p1".into()));
+        assert_eq!(
+            draw(&app, false).cell((20, 2)).unwrap().bg,
+            dim_toward_black(th.warn, TINT_PEAK * 0.6)
+        );
     }
 
     /// CARD LINE COUNTS: the lines behind the file count always follow it
