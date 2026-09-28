@@ -679,7 +679,7 @@ pub const SETTINGS_TABS: &[SettingsTab] = &[
             SettingSpec {
                 kind: SettingKind::HighlightCurrentCard,
                 label: "Highlight current card",
-                hint: "Keep the cursor's card raised while you type in its pane, tag its frame 'open' and fill its name row in the accent (off = the plain thick frame, dimmed while the pane has the keys)",
+                hint: "Drop the cursor's card fill for a thin halo around its frame, in the card's status color and pulsing while it runs, asks or waits unread (off = the plain thick frame over a raised fill)",
                 group: "",
             },
             SettingSpec {
@@ -1052,10 +1052,10 @@ pub struct Config {
     #[serde(alias = "hide_terminal_glyphs")]
     pub hide_card_marks: bool,
     /// HIGHLIGHT CURRENT CARD: the card under the cursor — the one the
-    /// pane reads — keeps its raised `sel_bg` fill while the pane has the
-    /// keys (dimming only for the PROJECT TABS), wears an `open` tag in
-    /// its top border and fills its name row in the accent. On by
-    /// default; off leaves the plain thick accent frame.
+    /// pane reads — drops its raised fill for a thin halo around its
+    /// frame in its status color, pulsing while something is going on.
+    /// On by default; off leaves the plain thick accent frame over the
+    /// fill.
     pub highlight_current_card: bool,
     /// Where the LAUNCHER VIEW's PANE — the session under the cursor, live
     /// — sits against the GRID of cards: `right` (down that side of them,
